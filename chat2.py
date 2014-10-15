@@ -38,9 +38,9 @@ while True:
 
         if current_row == curses.LINES-3 or inp == "clear":
             empty_line = ""
-            for i in range(0, curses.COLS-2):
+            for i in range(0, curses.COLS-10):
                 empty_line += " "
-            for row in range(2, curses.LINES-3):
+            for row in range(2, curses.LINES-4):
                 actual_win.addstr(row, 2, empty_line)
             actual_win.refresh()
             current_row = start_row
