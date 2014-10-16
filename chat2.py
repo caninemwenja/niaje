@@ -1,15 +1,14 @@
 import curses
+import curses.ascii
 import zmq
-import signal
 import logging
 import logging.config
-
-from functools import wraps
 
 # CONSTANTS
 prompt_string = ">> "
 start_row = 2
 current_row = start_row
+current_input = ""
 
 LOGGING = {
     "version": 1,
@@ -46,32 +45,6 @@ logging.config.dictConfig(LOGGING)
 logger = logging.getLogger(__file__)
 
 
-class TimeoutError(Exception):
-    pass
-
-
-def timeout(seconds=10, error_message="Timed Out!"):
-    logger.info("Timing out in: {}".format(seconds))
-
-    def decorator(func):
-        def _handle_timeout(signum, frame):
-            logger.info("Timed out!")
-            raise TimeoutError(error_message)
-
-        def wrapper(*args, **kwargs):
-            signal.signal(signal.SIGALRM, _handle_timeout)
-            signal.alarm(seconds)
-            try:
-                result = func(*args, **kwargs)
-            finally:
-                logger.info("Killing signal anyways.")
-                signal.alarm(0)
-            return result
-
-        return wraps(func)(wrapper)
-
-    return decorator
-
 # SERVER CONNECTION SETUP
 context = zmq.Context()
 sender = context.socket(zmq.PUB)
@@ -96,6 +69,11 @@ messages_win.box()
 
 screen.addstr(curses.LINES - 1, 0, prompt_string)
 
+screen.nodelay(True)
+curses.noecho()
+curses.cbreak()
+screen.keypad(1)
+
 screen.noutrefresh()
 messages_win.noutrefresh()
 curses.doupdate()
@@ -105,10 +83,14 @@ logger.info("Finished UI setup")
 
 # REUSABLE OPERATIONS
 def prompt():
-    logger.info("Prompting")
-    screen.move(curses.LINES - 1, len(prompt_string))
-    screen.clrtoeol()
-    screen.move(curses.LINES - 1, len(prompt_string))
+    logger.info("Prompting {}".format(current_input))
+    screen.move(curses.LINES - 1, len(prompt_string) + len(current_input))
+    if current_input != "":
+        screen.addstr(curses.LINES - 1, len(prompt_string), current_input)
+        curses.doupdate()
+    else:
+        screen.clrtoeol()
+    screen.move(curses.LINES - 1, len(prompt_string) + len(current_input))
 
 
 def next_row():
@@ -124,7 +106,6 @@ def print_string(string):
     next_row()
 
 
-@timeout(10)
 def read_string():
     inp = screen.getstr()
     logger.info("Preread got {}".format(inp))
@@ -154,8 +135,59 @@ def clear():
 
 def die():
     logger.info("Dying")
-    signal.alarm(0)
+    curses.nocbreak()
+    screen.keypad(0)
+    curses.echo()
     curses.endwin()
+
+
+def server_message(message):
+    print_string(message)
+    logger.info("Message from server: {}".format(message))
+
+
+def read_from_server(callback):
+    try:
+        message = receiver.recv_string(zmq.DONTWAIT)
+        callback(message)
+    except zmq.Again:
+        pass
+
+
+def handle_user_input(character):
+    global current_input
+    logger.info("Received character: {}".format(character))
+    is_enter = (character == curses.ascii.LF
+                or character == curses.ascii.CR
+                or character == curses.ascii.NL)
+    is_backspace = (character == curses.ascii.BS
+                    or character == curses.ascii.DEL)
+    if is_enter:
+        logger.info("Received enter")
+        if current_input == "quit" or current_input == "exit":
+            logger.info("Quiting")
+            raise KeyboardInterrupt()
+        elif current_input == "clear" or current_row == curses.LINES - 3:
+            logger.info("Clearing")
+            clear()
+        else:
+            logger.info("Sending message")
+            sender.send_string(current_input)
+            logger.info("Message from user: {}".format(current_input))
+
+        current_input = ""
+        logger.info("Emptied current input: {}".format(current_input))
+    elif is_backspace:
+        current_input = current_input[:-1]
+    elif curses.ascii.isprint(character):
+        current_input += curses.ascii.unctrl(character)
+
+
+def read_from_ui(callback):
+    c = screen.getch()
+
+    if c != curses.ERR:
+        callback(c)
 
 
 prompt()
@@ -164,32 +196,12 @@ prompt()
 while True:
     try:
         logger.info("Checking if there are any server messages")
-
-        try:
-            message = receiver.recv_string(zmq.DONTWAIT)
-            print_string(message)
-            logger.info("Message from server: {}".format(message))
-        except zmq.Again:
-            pass
+        read_from_server(server_message)
 
         logger.info("Checking if there are any user messages")
+        read_from_ui(handle_user_input)
 
-        try:
-            inp = read_string()
-
-            if inp == "quit" or inp == "exit":
-                break
-
-            if inp == "clear" or current_row == curses.LINES - 3:
-                clear()
-                prompt()
-                continue
-
-            sender.send_string(inp)
-            prompt()
-            logger.info("Message from user: {}".format(inp))
-        except TimeoutError:
-            pass
+        prompt()
     except KeyboardInterrupt:
         break
     except Exception:
