@@ -1,5 +1,6 @@
 import logging
 import logging.config
+import sys
 
 import channel
 import win
@@ -43,7 +44,14 @@ LOGGING = {
 logging.config.dictConfig(LOGGING)
 logger = logging.getLogger(__file__)
 
-channel = channel.Channel('tcp://localhost:5556', 'tcp://localhost:5557')
+publish_to = 'tcp://localhost:5556'
+subscribe_from = 'tcp://localhost:5557'
+
+if len(sys.argv) > 2:
+    publish_to = sys.argv[1]
+    subscribe_from = sys.argv[2]
+
+channel = channel.Channel(publish_to, subscribe_from)
 logger.info("Finished server connection setup")
 
 chat_win = win.ChatWin(">> ")
