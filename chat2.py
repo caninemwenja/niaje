@@ -83,13 +83,12 @@ logger.info("Finished UI setup")
 
 # REUSABLE OPERATIONS
 def prompt():
-    logger.info("Prompting {}".format(current_input))
+    #logger.info("Prompting {}".format(current_input))
     screen.move(curses.LINES - 1, len(prompt_string) + len(current_input))
+    screen.clrtoeol()
     if current_input != "":
         screen.addstr(curses.LINES - 1, len(prompt_string), current_input)
         curses.doupdate()
-    else:
-        screen.clrtoeol()
     screen.move(curses.LINES - 1, len(prompt_string) + len(current_input))
 
 
@@ -126,7 +125,7 @@ def clear():
     for i in range(0, curses.COLS - 4):
         empty_line += " "
 
-    for row in range(2, curses.LINES - 4):
+    for row in range(2, curses.LINES - 3):
         actual_win.addstr(row, 2, empty_line)
 
     actual_win.refresh()
@@ -159,9 +158,11 @@ def handle_user_input(character):
     logger.info("Received character: {}".format(character))
     is_enter = (character == curses.ascii.LF
                 or character == curses.ascii.CR
-                or character == curses.ascii.NL)
+                or character == curses.ascii.NL
+                or character == curses.KEY_ENTER)
     is_backspace = (character == curses.ascii.BS
-                    or character == curses.ascii.DEL)
+                    or character == curses.ascii.DEL
+                    or character == curses.KEY_BACKSPACE)
     if is_enter:
         logger.info("Received enter")
         if current_input == "quit" or current_input == "exit":
@@ -195,10 +196,14 @@ prompt()
 # EVENT LOOP
 while True:
     try:
-        logger.info("Checking if there are any server messages")
+        if current_row == curses.LINES - 3:
+            logger.info("Filled up space!")
+            clear()
+
+        #logger.info("Checking if there are any server messages")
         read_from_server(server_message)
 
-        logger.info("Checking if there are any user messages")
+        #logger.info("Checking if there are any user messages")
         read_from_ui(handle_user_input)
 
         prompt()
