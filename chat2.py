@@ -1,9 +1,9 @@
 import curses
 import curses.ascii
-import zmq
 import logging
 import logging.config
 
+import channel
 # CONSTANTS
 prompt_string = ">> "
 start_row = 2
@@ -46,14 +46,7 @@ logger = logging.getLogger(__file__)
 
 
 # SERVER CONNECTION SETUP
-context = zmq.Context()
-sender = context.socket(zmq.PUB)
-receiver = context.socket(zmq.SUB)
-
-sender.connect('tcp://localhost:5556')
-receiver.connect('tcp://localhost:5557')
-receiver.setsockopt(zmq.SUBSCRIBE, b"")
-
+channel = channel.Channel('tcp://localhost:5556', 'tcp://localhost:5557')
 logger.info("Finished server connection setup")
 
 # UI SETUP
@@ -145,14 +138,6 @@ def server_message(message):
     logger.info("Message from server: {}".format(message))
 
 
-def read_from_server(callback):
-    try:
-        message = receiver.recv_string(zmq.DONTWAIT)
-        callback(message)
-    except zmq.Again:
-        pass
-
-
 def handle_user_input(character):
     global current_input
     logger.info("Received character: {}".format(character))
@@ -173,7 +158,7 @@ def handle_user_input(character):
             clear()
         else:
             logger.info("Sending message")
-            sender.send_string(current_input)
+            channel.send(current_input)
             logger.info("Message from user: {}".format(current_input))
 
         current_input = ""
@@ -190,7 +175,7 @@ def read_from_ui(callback):
     if c != curses.ERR:
         callback(c)
 
-
+channel.add_callback(server_message)
 prompt()
 
 # EVENT LOOP
@@ -201,7 +186,7 @@ while True:
             clear()
 
         #logger.info("Checking if there are any server messages")
-        read_from_server(server_message)
+        channel.receive()
 
         #logger.info("Checking if there are any user messages")
         read_from_ui(handle_user_input)
