@@ -1,5 +1,7 @@
 import zmq
+import time
 
+print "Setting up...."
 context = zmq.Context()
 sender = context.socket(zmq.PUB)
 receiver = context.socket(zmq.SUB)
@@ -11,6 +13,9 @@ receiver.setsockopt(zmq.SUBSCRIBE, b"")
 
 poller = zmq.Poller()
 poller.register(receiver, zmq.POLLIN)
+
+time.sleep(1)
+print "Setup done"
 
 while True:
     try:
