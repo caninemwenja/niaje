@@ -1,10 +1,12 @@
 import logging
 import logging.config
 import sys
+import redis
 
 import win
 
-from channel import ReliableChannel
+from channel import (ReliableChannel, OrderedRedisMessageCache,
+                     RedisDeadMessageBackend)
 # CONSTANTS
 prompt_string = ">> "
 start_row = 2
@@ -55,7 +57,20 @@ if len(sys.argv) > 4:
     publish_to = sys.argv[3]
     subscribe_from = sys.argv[4]
 
-channel = ReliableChannel(identity, publish_to, subscribe_from)
+
+r = redis.StrictRedis(host='localhost', port=6379, db=0)
+message_cache = OrderedRedisMessageCache(r,
+                                         identity + "_sent2",
+                                         identity + "_received3")
+
+dead_backend = RedisDeadMessageBackend(r, identity + "_dead2")
+
+channel = ReliableChannel(identity, publish_to, subscribe_from,
+                          message_cache=message_cache,
+                          dead_message_backend=dead_backend,
+                          send_expiry=2 * 60 * 60,  # 2 hours
+                          acknowledge_expiry=2 * 60 * 60)  # 2 hours
+
 logger.info("Finished server connection setup")
 
 chat_win = win.ChatWin(">> ")

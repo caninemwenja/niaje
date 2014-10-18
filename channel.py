@@ -2,7 +2,6 @@ import zmq
 import json
 import uuid
 import time
-import redis
 
 from collections import OrderedDict
 
@@ -134,7 +133,7 @@ class MemoryMessageCache(MessageCache):
         self.received[message_id] = message
 
 
-class OrderedMessageCache(MemoryMessageCache):
+class OrderedMemoryMessageCache(MemoryMessageCache):
 
     def __init__(self):
         self.sent = OrderedDict()
@@ -143,8 +142,8 @@ class OrderedMessageCache(MemoryMessageCache):
 
 class RedisMessageCache(MessageCache):
 
-    def __init__(self, sent_name, received_name):
-        self.r = redis.StrictRedis(host='localhost', port=6379, db=0)
+    def __init__(self, redis_connection, sent_name, received_name):
+        self.r = redis_connection
         self.sent_name = sent_name
         self.received_name = received_name
 
@@ -215,14 +214,60 @@ class OrderedRedisMessageCache(RedisMessageCache):
         super(OrderedRedisMessageCache, self).mark_as_received(message_id, message)
 
 
+class DeadMessageBackend(object):
+
+    def store(context, comment):
+        return NotImplementedError()
+
+
+class MemoryDeadMessageBackend(object):
+
+    def __init__(self):
+        self.message_store = {}
+
+    def store(self, context, data, comment):
+        details = {
+            "comment": comment,
+            "context": context,
+            "data": data
+        }
+        self.message_store[context] = details
+
+
+class RedisDeadMessageBackend(object):
+
+    def __init__(self, redis_connection, store_name):
+        self.r = redis_connection
+        self.store_name = store_name
+
+    def store(self, context, data, comment):
+        details = {
+            "comment": comment,
+            "context": context,
+            "data": data
+        }
+        self.r.hset(self.store_name, context, json.dumps(details))
+
+
 class ReliableChannel(JsonChannel):
 
     def __init__(self, *args, **kwargs):
+        self.send_expiry = int(kwargs.get('send_expiry', 0))
+        self.acknowledge_expiry = int(kwargs.get('acknowledge_expiry', 0))
+        self.message_cache = kwargs.get('message_cache', OrderedMemoryMessageCache())
+        self.dead_message_backend = kwargs.get('dead_message_backend', MemoryDeadMessageBackend())
+
+        remove_keys = ['send_expiry', 'acknowledge_expiry', 'message_cache', 'dead_message_backend']
+
+        for key in remove_keys:
+            try:
+                kwargs.pop(key)
+            except KeyError:
+                pass
+
         super(ReliableChannel, self).__init__(*args, **kwargs)
 
         self.current_message_id = self.generate_new_message_id()
-        self.message_cache = OrderedRedisMessageCache(self.identity + "_sent",
-                                                      self.identity + "_received")
 
     def get_current_id(self):
         return self.identity + ":::" + str(self.current_message_id)
@@ -233,12 +278,20 @@ class ReliableChannel(JsonChannel):
     def synchronize(self):
         # resend unconfirmed messages
         for message in self.message_cache.get_unconfirmed_messages():
+            if self.send_expiry and time.time() - message['timestamp'] > self.send_expiry:
+                self.dead_message_backend.store(message['headers']['message_id'],
+                                                message, "Retry time expired")
+                continue
             super(ReliableChannel, self).send(message['destination'],
                                               message['message'],
                                               message['headers'])
 
         # confirm received messages
         for message in self.message_cache.get_received_syn_messages():
+            if self.acknowledge_expiry and time.time() - message['timestamp'] > self.acknowledge_expiry:
+                self.dead_message_backend.store(message['message']['headers']['message_id'],
+                                                message, "Acknoweledge time expired")
+                continue
             message['message']['headers'].update({'type': 'ACK'})
             super(ReliableChannel, self).send(message['destination'],
                                               message['message']['data'],
@@ -257,6 +310,7 @@ class ReliableChannel(JsonChannel):
             'destination': destination,
             'headers': headers,
             'status': 'SYN',
+            'timestamp': time.time()
         }
 
         self.message_cache.store_message_to_send(self.get_current_id(),
@@ -281,7 +335,8 @@ class ReliableChannel(JsonChannel):
         message_received = {
             'message': message,
             'destination': message['headers']['source'],
-            'status': 'SYN'
+            'status': 'SYN',
+            'timestamp': time.time()
         }
 
         self.message_cache.mark_as_received(message_id, message_received)
