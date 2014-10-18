@@ -77,14 +77,45 @@ class JsonChannel(Channel):
         return json.loads(message)
 
 
+class MessageCache(object):
+
+    def __init__(self):
+        self.sent = {}
+        self.received = {}
+
+    def get_unconfirmed_messages(self):
+        return [message for message in self.sent.values()
+                if message['status'] == 'SYN']
+
+    def get_received_syn_messages(self):
+        return [message for message in self.received.values()
+                if message['status'] == 'SYN']
+
+    def store_message_to_send(self, message_id, message):
+        self.sent[message_id] = message
+
+    def confirm(self, message_id):
+        self.sent[message_id]['status'] = 'ACK'
+
+    def is_unconfirmed(self, message_id):
+        return message_id in self.sent and self.sent[message_id]['status'] == 'SYN'
+
+    def is_already_received(self, message_id):
+        return message_id in self.received
+
+    def mark_as_received(self, message_id, message):
+        self.received[message_id] = message
+
+
 class ReliableChannel(JsonChannel):
 
     def __init__(self, *args, **kwargs):
         super(ReliableChannel, self).__init__(*args, **kwargs)
 
         self.current_message_id = self.generate_new_message_id()
-        self.received = {}
-        self.sent = {}
+        self.message_cache = MessageCache()
+        # self.received = {}
+        # self.sent = {}
 
     def get_current_id(self):
         return self.identity + ":::" + str(self.current_message_id)
@@ -94,19 +125,17 @@ class ReliableChannel(JsonChannel):
 
     def synchronize(self):
         # resend unconfirmed messages
-        for message in self.sent.values():
-            if message['status'] == 'SYN':
-                super(ReliableChannel, self).send(message['destination'],
-                                                  message['message'],
-                                                  message['headers'])
+        for message in self.message_cache.get_unconfirmed_messages():
+            super(ReliableChannel, self).send(message['destination'],
+                                              message['message'],
+                                              message['headers'])
 
         # confirm received messages
-        for message in self.received.values():
-            if message['status'] == 'SYN':
-                message['message']['headers'].update({'type': 'ACK'})
-                super(ReliableChannel, self).send(message['destination'],
-                                                  message['message']['data'],
-                                                  message['message']['headers'])
+        for message in self.message_cache.get_received_syn_messages():
+            message['message']['headers'].update({'type': 'ACK'})
+            super(ReliableChannel, self).send(message['destination'],
+                                              message['message']['data'],
+                                              message['message']['headers'])
 
     def send(self, destination, message_data, extra_headers=None):
         headers = {
@@ -116,12 +145,15 @@ class ReliableChannel(JsonChannel):
         if extra_headers:
             headers.update(extra_headers)
 
-        self.sent[self.get_current_id()] = {
+        message_to_store = {
             'message': message_data,
             'destination': destination,
             'headers': headers,
             'status': 'SYN',
         }
+
+        self.message_cache.store_message_to_send(self.get_current_id(),
+                                                 message_to_store)
 
         self.current_message_id = self.generate_new_message_id()
 
@@ -131,18 +163,20 @@ class ReliableChannel(JsonChannel):
         message_id = message['headers']['message_id']
 
         if 'type' in message['headers'] and message['headers']['type'] == 'ACK':
-            if message_id in self.sent:
-                self.sent[message_id]['status'] = 'ACK'
+            if self.message_cache.is_unconfirmed(message_id):
+                self.message_cache.confirm(message_id)
 
             return None
 
-        if message_id in self.received:
+        if self.message_cache.is_already_received(message_id):
             return None
 
-        self.received[message_id] = {
+        message_received = {
             'message': message,
             'destination': message['headers']['source'],
             'status': 'SYN'
         }
+
+        self.message_cache.mark_as_received(message_id, message_received)
 
         return message
