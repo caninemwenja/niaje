@@ -113,6 +113,7 @@ class ReliableChannel(JsonChannel):
                 self.dead_message_backend.store(message['headers']['message_id'],
                                                 message, "Retry time expired")
                 continue
+            print "Sending: {}".format(message)
             super(ReliableChannel, self).send(message['destination'],
                                               message['message'],
                                               message['headers'])
@@ -127,6 +128,9 @@ class ReliableChannel(JsonChannel):
             super(ReliableChannel, self).send(message['destination'],
                                               message['message']['data'],
                                               message['message']['headers'])
+            # confirm as acked
+            message['status'] = 'ACK'
+            self.message_cache.mark_as_received(message['message']['headers']['message_id'], message)
 
     def send(self, destination, message_data, extra_headers=None):
         headers = {
@@ -137,6 +141,7 @@ class ReliableChannel(JsonChannel):
             headers.update(extra_headers)
 
         message_to_store = {
+            'class': 'SEND',
             'message': message_data,
             'destination': destination,
             'headers': headers,
@@ -161,9 +166,22 @@ class ReliableChannel(JsonChannel):
             return None
 
         if self.message_cache.is_already_received(message_id):
+            message_received = {
+                'class': 'RECEIVE',
+                'message': message,
+                'destination': message['headers']['source'],
+                'status': 'SYN',
+                'timestamp': time.time()
+            }
+
+            # mark message for ack'ing
+            self.message_cache.mark_as_received(message_id, message_received)
+
+            # don't callback
             return None
 
         message_received = {
+            'class': 'RECEIVE',
             'message': message,
             'destination': message['headers']['source'],
             'status': 'SYN',

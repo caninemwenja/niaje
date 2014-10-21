@@ -112,7 +112,7 @@ class OrderedRedisMessageCache(RedisMessageCache):
         if not message_ids:
             return []
 
-        messages = [self.unserialize(message) for message in self.r.hmget(self.sent_name, *message_ids)]
+        messages = [self.unserialize(message) for message in self.r.hmget(self.sent_name, *message_ids) if message]
         return [message for message in messages if message['status'] == 'SYN']
 
     def get_received_syn_messages(self):
@@ -122,7 +122,7 @@ class OrderedRedisMessageCache(RedisMessageCache):
         if not message_ids:
             return []
 
-        messages = [self.unserialize(message) for message in self.r.hmget(self.received_name, *message_ids)]
+        messages = [self.unserialize(message) for message in self.r.hmget(self.received_name, *message_ids) if message]
         return [message for message in messages if message['status'] == 'SYN']
 
     def store_message_to_send(self, message_id, message):
@@ -131,8 +131,18 @@ class OrderedRedisMessageCache(RedisMessageCache):
 
         super(OrderedRedisMessageCache, self).store_message_to_send(message_id, message)
 
+    def confirm(self, message_id):
+        super(OrderedRedisMessageCache, self).confirm(message_id)
+        key_list = self.sent_name + "_keys"
+        self.r.lrem(key_list, 0, message_id)
+
     def mark_as_received(self, message_id, message):
         key_list = self.received_name + "_keys"
-        self.r.rpush(key_list, message_id)
+
+        if not self.is_already_received(message_id):
+            self.r.rpush(key_list, message_id)
+
+        if message['status'] == 'ACK':
+            self.r.lrem(key_list, 0, message_id)
 
         super(OrderedRedisMessageCache, self).mark_as_received(message_id, message)
